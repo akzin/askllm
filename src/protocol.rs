@@ -110,14 +110,20 @@ mod tests {
     #[test]
     fn parses_content_and_done_events() {
         let event = r#"data: {"choices":[{"delta":{"content":"sudo snap refresh"}}]}"#;
-        assert_eq!(parse_sse_event(event).unwrap().as_deref(), Some("sudo snap refresh"));
+        assert_eq!(
+            parse_sse_event(event).unwrap().as_deref(),
+            Some("sudo snap refresh")
+        );
         assert_eq!(parse_sse_event("data: [DONE]").unwrap(), None);
     }
 
     #[test]
     fn handles_events_split_across_chunks() {
         let mut decoder = SseDecoder::default();
-        assert!(decoder.feed(b"data: {\"choices\":[{\"delta\":{\"content\":\"sudo ").unwrap().is_empty());
+        assert!(decoder
+            .feed(b"data: {\"choices\":[{\"delta\":{\"content\":\"sudo ")
+            .unwrap()
+            .is_empty());
         let events = decoder
             .feed(b"snap refresh\"}}]}\n\ndata: [DONE]\n\n")
             .unwrap();

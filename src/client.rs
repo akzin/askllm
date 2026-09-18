@@ -9,11 +9,7 @@ use std::io::{self, Write};
 pub async fn ask(config: &Config, prompt: &str) -> Result<()> {
     let client = reqwest::Client::new();
     let url = format!("{}/chat/completions", config.base_url.trim_end_matches('/'));
-    let request = ChatRequest::streaming(
-        &config.model,
-        &config.system_prompt,
-        prompt,
-    );
+    let request = ChatRequest::streaming(&config.model, &config.system_prompt, prompt);
 
     let mut builder = client
         .post(url)
