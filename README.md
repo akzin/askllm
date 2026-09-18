@@ -3,7 +3,7 @@
 `askllm` is a small Rust command-line client for an OpenAI-compatible local LLM endpoint. Ask a question and receive the answer as streamed text:
 
 ```sh
-askllm what is the weather?
+askllm how do I install a Snap package?
 ```
 
 The default configuration is designed for a local Ubuntu-aware setup. It uses the endpoint and model configured in `~/.config/askllm/config.toml`.
@@ -73,7 +73,7 @@ Do not invent system details or add unnecessary explanation.
 Pass the question as the command-line arguments:
 
 ```sh
-askllm wat is de status van mijn systeem?
+askllm how do I install a Snap package?
 ```
 
 The response is streamed directly to the terminal. No environment variables or command-line configuration flags are required.
