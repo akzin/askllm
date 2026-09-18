@@ -15,7 +15,7 @@ The default configuration is designed for a local Ubuntu-aware setup. It uses th
 The installer downloads the latest `askllm` binary from GitHub Releases and installs it into `~/.local/bin`:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/akzin/askllm/main/install.sh | sh -s -- akzin/askllm
+curl -fsSL https://raw.githubusercontent.com/akzin/askllm/master/install.sh | sh -s -- akzin/askllm
 ```
 
 The installer currently installs the prebuilt Linux `x86_64` release and does not require `sudo`. The Rust source is portable, but releases for macOS and Windows are not published yet.
