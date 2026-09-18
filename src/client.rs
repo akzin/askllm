@@ -32,18 +32,14 @@ where
     let mut decoder = SseDecoder::default();
 
     while let Some(chunk) = stream.next().await {
-        for content in decoder.feed(&chunk?)? {
-            if let Some(content) = content {
-                write!(output, "{content}")?;
-                output.flush()?;
-            }
+        for content in decoder.feed(&chunk?)?.into_iter().flatten() {
+            write!(output, "{content}")?;
+            output.flush()?;
         }
     }
 
-    for content in decoder.finish()? {
-        if let Some(content) = content {
-            write!(output, "{content}")?;
-        }
+    for content in decoder.finish()?.into_iter().flatten() {
+        write!(output, "{content}")?;
     }
     writeln!(output)?;
     Ok(())
