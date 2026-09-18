@@ -1,0 +1,11 @@
+# Copy to ~/.config/askllm/config.toml
+base_url = "http://localhost:20128/v1"
+model = "gh/gpt-5.6-luna"
+
+system_prompt = """
+Respond in Dutch.
+Answer briefly and directly.
+For command-line questions, provide the exact command first.
+Mention when sudo or another permission is required.
+Do not invent system details or add unnecessary explanation.
+"""

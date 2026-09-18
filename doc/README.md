@@ -1,8 +1,8 @@
-# llmask
+# askllm
 
 ## v0.1 goal
 
-`llmask what is the weather?` returns a short text answer, for example:
+`askllm what is the weather?` returns a short text answer, for example:
 
 ```text
 25 degrees, with some rain
@@ -26,4 +26,4 @@ Chat history, tools, files, multiple providers, terminal UI, and interactive con
 
 ## Design assumption
 
-“Openroute” means OpenRouter. The endpoint, model name, and API key are configurable through environment variables. For local use, `LLMASK_BASE_URL` can point to a local OpenAI-compatible server and the key can remain empty; OpenRouter requires a key.
+“Openroute” means an OpenAI-compatible route. The endpoint, model name, and system prompt are configured in `~/.config/askllm/config.toml`. The initial backend is your local server at `http://localhost:20128/v1`; no authentication is required.

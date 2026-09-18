@@ -3,30 +3,21 @@
 ## Initial interface
 
 ```text
-llmask --model openai/gpt-oss-20b what is the weather?
+askllm what is the weather?
 ```
 
-The prompt is required and consists of all remaining command-line arguments joined with spaces. Quotes are not required. `--model` is required unless `LLMASK_MODEL` is set. The CLI requests a streaming response and writes each text chunk directly to stdout, followed by a newline when the response is complete.
+The prompt is required and consists of all command-line arguments after `askllm`, joined with spaces. Quotes are not required. The CLI requests a streaming response and writes each text chunk directly to stdout, followed by a newline when the response is complete.
 
 ## Configuration
 
-| Variable | Default | Meaning |
+| File key | Meaning |
 |---|---|---|
-| `LLMASK_BASE_URL` | `https://openrouter.ai/api/v1` | OpenAI-compatible API base URL |
-| `LLMASK_MODEL` | empty | OpenRouter or local model name |
-| `LLMASK_API_KEY` | empty | Optional bearer token |
-| `LLMASK_LOCATION` | required | Location used in the system prompt |
-| `LLMASK_OS` | `Ubuntu` | Operating system used in the system prompt |
+| `base_url` | OpenAI-compatible API base URL |
+| `model` | OpenRouter or local model name |
+| `api_key` | Optional bearer token |
+| `system_prompt` | Complete system prompt, including any line breaks |
 
-No configuration file in v0.1. Do not prompt for missing configuration. OpenRouter without a key fails immediately with a clear error; a local endpoint may run without a key.
-
-## Options
-
-```text
-llmask --model <provider/model> <prompt words...>
-```
-
-`--model` takes precedence over `LLMASK_MODEL`. The model value is passed unchanged in the OpenAI-compatible request.
+The default configuration file is `~/.config/askllm/config.toml`. Do not prompt for missing configuration. OpenRouter without a key fails immediately with a clear error; a local endpoint may run without a key.
 
 ## Errors
 
@@ -37,16 +28,20 @@ llmask --model <provider/model> <prompt words...>
 ## Examples
 
 ```text
-llmask --model openai/gpt-oss-20b summarize this sentence
-LLMASK_MODEL=anthropic/claude-sonnet-4 LLMASK_LOCATION=Amsterdam llmask what is the weather? > answer.txt
+askllm summarize this sentence
+askllm what is the weather? > answer.txt
 ```
 
 ## System prompt
 
-The CLI always builds this system message, replacing `{location}` with `LLMASK_LOCATION` and `{os}` with `LLMASK_OS`:
+The CLI sends `system_prompt` from the TOML file as one complete system message. It does not perform placeholder replacement or modify the text.
 
 ```text
-The user lives in {location} and uses {os}. Respond in Dutch. Answer briefly and directly. For command-line questions, provide the exact command first, explain only what is necessary, and mention when sudo or another permission is required. Do not invent system details or add unnecessary explanation.
+Respond in Dutch.
+Answer briefly and directly.
+For command-line questions, provide the exact command first.
+Mention when sudo or another permission is required.
+Do not invent system details or add unnecessary explanation.
 ```
 
 JSON output, stdin, and interactive chat are deferred to a later iteration. Streaming is the default terminal output mode in v0.1.
