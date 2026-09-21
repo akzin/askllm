@@ -22,7 +22,7 @@ case "$(uname -m)" in
 esac
 
 if [ "$version" = "latest" ]; then
-    url="https://github.com/$repo/releases/latest/download/askllm"
+    url="https://github.com/$repo/releases/latest/download/askllm?cachebust=$(date +%s)"
 else
     url="https://github.com/$repo/releases/download/$version/askllm"
 fi
@@ -36,7 +36,8 @@ trap cleanup EXIT HUP INT TERM
 printf 'Downloading askllm from %s\n' "$url"
 curl --fail --location --silent --show-error "$url" --output "$tmp_file"
 mkdir -p "$bin_dir"
-install -m 755 "$tmp_file" "$bin_dir/askllm"
+cp "$tmp_file" "$bin_dir/askllm"
+chmod 755 "$bin_dir/askllm"
 
 printf 'Installed askllm to %s/askllm\n' "$bin_dir"
 case ":${PATH:-}:" in
