@@ -1,54 +1,246 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct Message {
+    pub role: String,
+    pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCall>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+}
+
+impl Message {
+    pub fn system(content: &str) -> Self {
+        Self {
+            role: "system".to_owned(),
+            content: content.to_owned(),
+            tool_calls: None,
+            tool_call_id: None,
+        }
+    }
+
+    pub fn user(content: &str) -> Self {
+        Self {
+            role: "user".to_owned(),
+            content: content.to_owned(),
+            tool_calls: None,
+            tool_call_id: None,
+        }
+    }
+
+    pub fn assistant_tool_calls(tool_calls: Vec<ToolCall>) -> Self {
+        Self {
+            role: "assistant".to_owned(),
+            content: String::new(),
+            tool_calls: Some(tool_calls),
+            tool_call_id: None,
+        }
+    }
+
+    pub fn assistant_with_tool_calls(content: &str, tool_calls: Vec<ToolCall>) -> Self {
+        Self {
+            role: "assistant".to_owned(),
+            content: content.to_owned(),
+            tool_calls: Some(tool_calls),
+            tool_call_id: None,
+        }
+    }
+
+    pub fn assistant_text(content: &str) -> Self {
+        Self {
+            role: "assistant".to_owned(),
+            content: content.to_owned(),
+            tool_calls: None,
+            tool_call_id: None,
+        }
+    }
+
+    pub fn tool(tool_call_id: &str, content: String) -> Self {
+        Self {
+            role: "tool".to_owned(),
+            content,
+            tool_calls: None,
+            tool_call_id: Some(tool_call_id.to_owned()),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct ToolCall {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub function: FunctionCall,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct FunctionCall {
+    pub name: String,
+    pub arguments: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct ChatRequest {
     pub model: String,
     pub messages: Vec<Message>,
     pub stream: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<ToolDefinition>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
-pub struct Message {
-    pub role: String,
-    pub content: String,
+pub struct ToolDefinition {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub function: FunctionDefinition,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FunctionDefinition {
+    pub name: String,
+    pub description: String,
+    pub parameters: serde_json::Value,
 }
 
 impl ChatRequest {
-    pub fn streaming(model: &str, system_prompt: &str, user_prompt: &str) -> Self {
+    pub fn streaming(model: &str, messages: Vec<Message>, tools: Vec<ToolDefinition>) -> Self {
+        let tool_choice = (!tools.is_empty()).then(|| "auto".to_owned());
         Self {
             model: model.to_owned(),
-            messages: vec![
-                Message {
-                    role: "system".to_owned(),
-                    content: system_prompt.to_owned(),
-                },
-                Message {
-                    role: "user".to_owned(),
-                    content: user_prompt.to_owned(),
-                },
-            ],
+            messages,
             stream: true,
+            tools,
+            tool_choice,
+            reasoning_effort: None,
         }
+    }
+
+    pub fn with_reasoning_effort(mut self, effort: Option<String>) -> Self {
+        self.reasoning_effort = effort;
+        self
     }
 }
 
+pub fn tool_definitions() -> Vec<ToolDefinition> {
+    vec![
+        ToolDefinition {
+            kind: "function".to_owned(),
+            function: FunctionDefinition {
+                name: "bash".to_owned(),
+                description: "Run the shell command on the user's machine. The command runs only \
+                    after the user confirms it. Use it for every command you propose. You may \
+                    chain steps with && and pipe with |; never use ;, ||, |& or redirects. Set \
+                    follow_up to false when the output speaks for itself."
+                    .to_owned(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "command": {
+                            "type": "string",
+                            "description": "The exact single-line command to run."
+                        },
+                        "follow_up": {
+                            "type": "boolean",
+                            "description": "Set false only when the command output is the complete answer and needs no explanation, for example pwd or ls. Set true for state changes, warnings, failures, or when another step follows."
+                        }
+                    },
+                    "required": ["command"]
+                }),
+            },
+        },
+        ToolDefinition {
+            kind: "function".to_owned(),
+            function: FunctionDefinition {
+                name: "explore".to_owned(),
+                description: "Run exactly one read-only shell command to inspect the system \
+                    before answering. The command must match the user's allowlist and must not \
+                    use pipes, redirects, semicolons, substitutions or private files."
+                    .to_owned(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "command": {
+                            "type": "string",
+                            "description": "The exact single-line read-only command to run."
+                        }
+                    },
+                    "required": ["command"]
+                }),
+            },
+        },
+    ]
+}
+
 #[derive(Debug, Deserialize)]
+pub struct ChatResponse {
+    #[serde(default)]
+    pub choices: Vec<ChatChoice>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ChatChoice {
+    pub message: ChatResponseMessage,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ChatResponseMessage {
+    #[serde(default)]
+    pub tool_calls: Option<Vec<ToolCall>>,
+}
+
+#[derive(Debug, Default, Deserialize)]
 struct StreamChunk {
+    #[serde(default)]
     choices: Vec<StreamChoice>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct StreamChoice {
+    #[serde(default)]
     delta: Delta,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct Delta {
+    #[serde(default)]
     content: Option<String>,
+    #[serde(default, rename = "reasoning_content")]
+    _reasoning_content: Option<String>,
+    #[serde(default)]
+    tool_calls: Vec<ToolCallDelta>,
 }
 
-pub fn parse_sse_event(event: &str) -> Result<Option<String>> {
+#[derive(Debug, Default, Deserialize)]
+pub struct ToolCallDelta {
+    #[serde(default)]
+    pub index: Option<usize>,
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub function: Option<FunctionDelta>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct FunctionDelta {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub arguments: Option<String>,
+}
+
+#[derive(Debug, Default)]
+pub struct StreamEvent {
+    pub content: Option<String>,
+    pub tool_calls: Vec<ToolCallDelta>,
+}
+
+pub fn parse_sse_event(event: &str) -> Result<Option<StreamEvent>> {
     let data = event
         .lines()
         .filter_map(|line| line.strip_prefix("data:"))
@@ -61,10 +253,13 @@ pub fn parse_sse_event(event: &str) -> Result<Option<String>> {
     }
 
     let chunk: StreamChunk = serde_json::from_str(&data).context("invalid SSE JSON event")?;
-    Ok(chunk
-        .choices
-        .first()
-        .and_then(|choice| choice.delta.content.clone()))
+    let Some(choice) = chunk.choices.into_iter().next() else {
+        return Ok(None);
+    };
+    Ok(Some(StreamEvent {
+        content: choice.delta.content,
+        tool_calls: choice.delta.tool_calls,
+    }))
 }
 
 #[derive(Debug, Default)]
@@ -72,49 +267,183 @@ pub struct SseDecoder {
     buffer: Vec<u8>,
 }
 
+const MAX_EVENT_BYTES: usize = 1024 * 1024;
+
 impl SseDecoder {
-    pub fn feed(&mut self, bytes: &[u8]) -> Result<Vec<Option<String>>> {
+    pub fn feed(&mut self, bytes: &[u8]) -> Result<Vec<StreamEvent>> {
         self.buffer.extend_from_slice(bytes);
         let mut events = Vec::new();
 
-        while let Some(position) = self.buffer.windows(2).position(|window| window == b"\n\n") {
-            let event = String::from_utf8(self.buffer.drain(..position + 2).collect())?;
-            events.push(parse_sse_event(event.trim_end())?);
+        while let Some((position, separator)) = next_event_boundary(&self.buffer) {
+            if position > MAX_EVENT_BYTES {
+                anyhow::bail!("SSE event exceeded {MAX_EVENT_BYTES} bytes");
+            }
+            let event = String::from_utf8(self.buffer.drain(..position + separator).collect())?;
+            if let Some(event) = parse_sse_event(event.trim_end())? {
+                events.push(event);
+            }
+        }
+        if self.buffer.len() > MAX_EVENT_BYTES {
+            anyhow::bail!("SSE event exceeded {MAX_EVENT_BYTES} bytes");
         }
 
         Ok(events)
     }
 
-    pub fn finish(&mut self) -> Result<Vec<Option<String>>> {
+    pub fn finish(&mut self) -> Result<Vec<StreamEvent>> {
         if self.buffer.is_empty() {
             return Ok(Vec::new());
         }
+        if self.buffer.len() > MAX_EVENT_BYTES {
+            anyhow::bail!("SSE event exceeded {MAX_EVENT_BYTES} bytes");
+        }
 
         let event = String::from_utf8(std::mem::take(&mut self.buffer))?;
-        Ok(vec![parse_sse_event(event.trim_end())?])
+        Ok(parse_sse_event(event.trim_end())?.into_iter().collect())
+    }
+}
+
+fn next_event_boundary(buffer: &[u8]) -> Option<(usize, usize)> {
+    let lf = buffer
+        .windows(2)
+        .position(|window| window == b"\n\n")
+        .map(|position| (position, 2));
+    let crlf = buffer
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map(|position| (position, 4));
+    match (lf, crlf) {
+        (Some(lf), Some(crlf)) => Some(if lf.0 <= crlf.0 { lf } else { crlf }),
+        (Some(boundary), None) | (None, Some(boundary)) => Some(boundary),
+        (None, None) => None,
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct ToolCallAccumulator {
+    calls: Vec<PartialToolCall>,
+}
+
+#[derive(Debug, Default)]
+struct PartialToolCall {
+    id: String,
+    name: String,
+    arguments: String,
+}
+
+impl ToolCallAccumulator {
+    pub fn apply(&mut self, deltas: Vec<ToolCallDelta>) {
+        for delta in deltas {
+            let index = delta.index.unwrap_or(0);
+            while self.calls.len() <= index {
+                self.calls.push(PartialToolCall::default());
+            }
+            let call = &mut self.calls[index];
+            if let Some(id) = delta.id {
+                if call.id.is_empty() {
+                    call.id = id;
+                }
+            }
+            if let Some(function) = delta.function {
+                if let Some(name) = function.name {
+                    call.name.push_str(&name);
+                }
+                if let Some(arguments) = function.arguments {
+                    call.arguments.push_str(&arguments);
+                }
+            }
+        }
+    }
+
+    pub fn finish(self) -> Vec<ToolCall> {
+        self.calls
+            .into_iter()
+            .filter(|call| !call.name.is_empty())
+            .map(|call| ToolCall {
+                id: call.id,
+                kind: "function".to_owned(),
+                function: FunctionCall {
+                    name: call.name,
+                    arguments: call.arguments,
+                },
+            })
+            .collect()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_sse_event, ChatRequest, SseDecoder};
+    use super::{
+        parse_sse_event, tool_definitions, ChatRequest, Message, SseDecoder, ToolCallAccumulator,
+        MAX_EVENT_BYTES,
+    };
+
+    fn feed_all(decoder: &mut SseDecoder, text: &str) -> Vec<super::StreamEvent> {
+        decoder.feed(text.as_bytes()).unwrap()
+    }
 
     #[test]
-    fn builds_streaming_request() {
-        let request = ChatRequest::streaming("model", "system", "question");
+    fn builds_streaming_request_with_tools() {
+        let request =
+            ChatRequest::streaming("model", vec![Message::user("question")], tool_definitions())
+                .with_reasoning_effort(Some("none".to_owned()));
         assert!(request.stream);
-        assert_eq!(request.messages[0].role, "system");
-        assert_eq!(request.messages[1].content, "question");
+        assert_eq!(request.messages.len(), 1);
+        assert_eq!(request.tools.len(), 2);
+        assert_eq!(request.tools[0].function.name, "bash");
+        assert_eq!(request.tool_choice.as_deref(), Some("auto"));
+        assert_eq!(request.reasoning_effort.as_deref(), Some("none"));
+    }
+
+    #[test]
+    fn bash_tool_documents_follow_up() {
+        let schema = tool_definitions()[0].function.parameters.to_string();
+        assert!(schema.contains("follow_up"));
+    }
+
+    #[test]
+    fn handles_crlf_events() {
+        let mut decoder = SseDecoder::default();
+        let events = decoder
+            .feed(b"data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\r\n\r\n")
+            .unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].content.as_deref(), Some("hi"));
+    }
+
+    #[test]
+    fn handles_crlf_split_across_chunks() {
+        let mut decoder = SseDecoder::default();
+        assert!(decoder
+            .feed(b"data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\r\n")
+            .unwrap()
+            .is_empty());
+        let events = decoder.feed(b"\r\n").unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].content.as_deref(), Some("hi"));
+    }
+
+    #[test]
+    fn rejects_oversized_events() {
+        let mut decoder = SseDecoder::default();
+        let data = vec![b'a'; MAX_EVENT_BYTES + 1];
+        assert!(decoder.feed(&data).is_err());
     }
 
     #[test]
     fn parses_content_and_done_events() {
         let event = r#"data: {"choices":[{"delta":{"content":"sudo snap refresh"}}]}"#;
-        assert_eq!(
-            parse_sse_event(event).unwrap().as_deref(),
-            Some("sudo snap refresh")
-        );
-        assert_eq!(parse_sse_event("data: [DONE]").unwrap(), None);
+        let parsed = parse_sse_event(event).unwrap().unwrap();
+        assert_eq!(parsed.content.as_deref(), Some("sudo snap refresh"));
+        assert!(parse_sse_event("data: [DONE]").unwrap().is_none());
+    }
+
+    #[test]
+    fn ignores_reasoning_content() {
+        let event =
+            r#"data: {"choices":[{"delta":{"reasoning_content":"thinking","content":null}}]}"#;
+        let parsed = parse_sse_event(event).unwrap().unwrap();
+        assert!(parsed.content.is_none());
     }
 
     #[test]
@@ -127,6 +456,43 @@ mod tests {
         let events = decoder
             .feed(b"snap refresh\"}}]}\n\ndata: [DONE]\n\n")
             .unwrap();
-        assert_eq!(events, vec![Some("sudo snap refresh".to_owned()), None]);
+        let contents = events
+            .into_iter()
+            .filter_map(|event| event.content)
+            .collect::<Vec<_>>();
+        assert_eq!(contents, vec!["sudo snap refresh".to_owned()]);
+    }
+
+    #[test]
+    fn assembles_streamed_tool_calls() {
+        let mut decoder = SseDecoder::default();
+        let first = feed_all(
+            &mut decoder,
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"bash\",\"arguments\":\"{\\\"com\"}}]},\"finish_reason\":null}]}\n\n",
+        );
+        let second = feed_all(
+            &mut decoder,
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"mand\\\":\\\"pwd\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
+        );
+
+        let mut accumulator = ToolCallAccumulator::default();
+        for event in first.into_iter().chain(second) {
+            accumulator.apply(event.tool_calls);
+        }
+
+        let calls = accumulator.finish();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].id, "call_1");
+        assert_eq!(calls[0].function.name, "bash");
+        assert_eq!(calls[0].function.arguments, r#"{"command":"pwd"}"#);
+    }
+
+    #[test]
+    fn serializes_tool_messages_for_the_api() {
+        let message = Message::tool("call_1", "ok".to_owned());
+        let value = serde_json::to_value(&message).unwrap();
+        assert_eq!(value["role"], "tool");
+        assert_eq!(value["tool_call_id"], "call_1");
+        assert!(value.get("tool_calls").is_none());
     }
 }

@@ -9,3 +9,10 @@ For command-line questions, provide the exact command first.
 Mention when sudo or another permission is required.
 Do not invent system details or add unnecessary explanation.
 """
+
+command_execution_enabled = true
+reasoning_effort = "none"
+
+[explore]
+allow = []
+approved = false
