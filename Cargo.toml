@@ -1,6 +1,6 @@
 [package]
 name = "askllm"
-version = "0.1.3"
+version = "0.2.0"
 edition = "2021"
 description = "A concise streaming command-line interface for OpenAI-compatible LLM APIs"
 
