@@ -69,6 +69,12 @@ to `tools` on every platform:
   dangerous cmdlets, aliases, shell hosts and redirection. Every `run` command
   is confirmed.
 
+`explore` has no shell parameter; it is always cmd on Windows and sh on Unix.
+Only `run` exposes a shell choice. The model may use `run` during research as
+well as for the final command. A declined `run` returns a tool message instead
+of ending the turn, so the model can explain the command for the user to run
+themselves or suggest an alternative.
+
 The child inherits askllm's console and writes to pipes; no new console window
 is created. Windows-specific modules are compiled only with `cfg(windows)`, so
 the Linux build has no dependency on PowerShell or cmd.

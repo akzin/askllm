@@ -143,10 +143,13 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
     let (run_description, run_parameters, explore_description) = if cfg!(windows) {
         (
             "Run a shell command on the user's machine. The command runs only after the user \
-             confirms it. Use it for every command you propose. Choose shell=cmd for one simple \
-             command, or shell=powershell for everything else. cmd has no pipes, redirects, &, \
-             &&, ||, %, !, ^ or ;. PowerShell uses ; to separate steps and | to pipe; never use \
-             &&, ||, |& or redirects. Set follow_up to false when the output speaks for itself.",
+             confirms it with y/N. Use run for anything that needs the user's approval: commands \
+             outside the explore allowlist, network requests, live data, and actions that change \
+             the system. You may use run during research as well as for the final command. Choose \
+             shell=cmd only for one simple command; use shell=powershell for everything else, \
+             including network requests. cmd has no pipes, redirects, &, &&, ||, %, !, ^ or ;. \
+             PowerShell uses ; to separate steps and | to pipe; never use &&, ||, |& or redirects. \
+             Set follow_up to false when the output speaks for itself.",
             serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -162,22 +165,25 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
                         "type": "string",
                         "enum": ["cmd", "powershell"],
                         "default": "powershell",
-                        "description": "Use cmd for one simple command; use powershell for everything else."
+                        "description": "Use cmd for one simple command; use powershell for everything else, including network requests."
                     }
                 },
                 "required": ["command"]
             }),
-            "Run exactly one read-only cmd command to inspect the system before answering. Use it \
-             for simple checks like dir, where, whoami, ipconfig, ver, vol, hostname, tasklist and \
-             getmac. The command must match the user's allowlist and must not use pipes, redirects, \
-             &, &&, ||, %, !, ^, ; or private files.",
+            "Run exactly one read-only cmd command for your own investigation before answering. \
+             explore always uses cmd on Windows and has no shell parameter; it is not for \
+             user-facing actions or network requests. Use it for simple checks like dir, where, \
+             whoami, ipconfig, ver, vol, hostname, tasklist and getmac. The command must match the \
+             user's allowlist and must not use pipes, redirects, &, &&, ||, %, !, ^, ; or private \
+             files.",
         )
     } else {
         (
             "Run a bash command on the user's machine. The command runs only after the user \
-             confirms it. Use it for every command you propose. You may chain steps with && and \
-             pipe with |; never use ;, ||, |& or redirects. Set follow_up to false when the \
-             output speaks for itself.",
+             confirms it with y/N. Use run for anything that needs the user's approval, including \
+             network requests and live data; you may use it during research as well as for the \
+             final command. You may chain steps with && and pipe with |; never use ;, ||, |& or \
+             redirects. Set follow_up to false when the output speaks for itself.",
             serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -192,9 +198,10 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
                 },
                 "required": ["command"]
             }),
-            "Run exactly one read-only shell command to inspect the system before answering. The \
-             command must match the user's allowlist and must not use pipes, redirects, \
-             semicolons, substitutions or private files.",
+            "Run exactly one read-only sh command for your own investigation before answering. \
+             explore always uses sh on Linux and has no shell parameter; it is not for user-facing \
+             actions or network requests. The command must match the user's allowlist and must not \
+             use pipes, redirects, semicolons, substitutions or private files.",
         )
     };
 

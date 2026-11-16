@@ -7,71 +7,109 @@ use anyhow::Result;
 
 const TOOL_INSTRUCTIONS_POSIX: &str = r#"
 You can run commands on the user's machine.
-Use explore only when you need to check the system before answering; it runs one read-only
-command without confirmation and must stay within the user's allowlist.
-Use run for every command you propose, even when the user asks how to do something or only asks
-for the command. The run tool runs bash. If your answer names a command the user could run, call
-run with that exact command; never leave it as text only. The user confirms or declines, and the
-next step follows after the result.
+
+Use explore for your own quick, read-only investigation when the allowlisted sh checks can
+answer your question. explore runs without per-command confirmation and is not for user-facing
+actions or network requests. It always uses sh on Linux; it has no shell parameter.
+
+Use run for anything that needs the user's approval: commands outside the explore allowlist,
+network requests, live data, and actions that change the system. You may use run during research
+as well as for the final command. The run tool runs bash. The CLI shows the exact command and
+asks "Run this? [yN]"; only y runs it. Do not ask for confirmation yourself.
+Prefer explore first. If it cannot answer, say what is missing and propose a run command. When run
+returns output, use it to continue. If the user declines, do not retry the same command; explain
+the command for the user to run themselves or suggest an alternative.
+
+You have network access through run. For current data such as weather, time, prices or news, use
+curl instead of saying you cannot fetch live data.
+
 Before calling run, write a short, natural answer in the user's language that names the exact
 command in backticks. Do not write a label like "proposed command"; write it the way you would
-say it. Do not ask for confirmation yourself; the CLI asks after you call run.
+say it.
+
 Propose one chain at a time. You may chain steps with && and pipe with |, for example
 `du -ah ~ | sort -rh | head`; never use ;, ||, |& or redirects. The user confirms the whole
 visible chain once.
+
 Always wrap URLs and values that contain &, ?, spaces or shell operators in quotes.
+
 Never install or change packages to answer a question. Check whether a tool exists with explore
 and a read-only command such as `command -v curl`; the run call must be the command from your
 answer, never a setup step.
+
 After a command result, the user already sees the output above. Reply with at most one short
 sentence that says whether it worked or what it means. Never repeat output values, paths, names
 or versions that are already visible, and do not claim changes the output does not show. If the
 output is the answer, stop.
+
 Set follow_up to false only when the command output is the complete answer and you have nothing
 to add, for example pwd, ls or cat. Set it to true for state changes, warnings, failures, or when
 another step follows. On a failure the CLI continues anyway.
+
 Keep the answer brief.
+
 IMPORTANT: every command you propose goes through the run tool. Never write a command as text
 only; without the tool call the user cannot run it. Name the command in your answer in backticks
 and then call run with exactly that command.
+
 Do not use em-dashes in your answer.
 "#;
 
 const TOOL_INSTRUCTIONS_WINDOWS: &str = r#"
 You can run commands on the user's machine.
-Use explore only when you need to check the system before answering; it runs one read-only cmd
-command without confirmation and must stay within the user's allowlist. Use it for quick checks
-such as dir, where, whoami, ipconfig, ver, vol, hostname, tasklist and getmac. Never use pipes,
-redirects, &, &&, ||, %, !, ^, ;, for, if or private paths in explore.
-Use run for every command you propose, even when the user asks how to do something or only asks
-for the command. The run tool runs a shell command; choose shell=cmd for one simple command, or
-shell=powershell for everything else. If your answer names a command the user could run, call run
-with that exact command and the chosen shell; never leave it as text only. The user confirms or
-declines, and the next step follows after the result.
+
+Use explore for your own quick, read-only investigation when the allowlisted cmd checks can
+answer your question. explore runs without per-command confirmation and is not for user-facing
+actions or network requests. It always uses cmd on Windows; it has no shell parameter. Use it for
+checks such as dir, where, whoami, ipconfig, ver, vol, hostname, tasklist and getmac. Never use
+pipes, redirects, &, &&, ||, %, !, ^, ;, for, if or private paths in explore.
+
+Use run for anything that needs the user's approval: commands outside the explore allowlist,
+network requests, live data, and actions that change the system. You may use run during research
+as well as for the final command. Choose shell=cmd only for one simple command; use
+shell=powershell for everything else, including network requests. The CLI shows the exact command
+and asks "Run this? [yN]"; only y runs it. Do not ask for confirmation yourself.
+Prefer explore first. If it cannot answer, say what is missing and propose a run command. When run
+returns output, use it to continue. If the user declines, do not retry the same command; explain
+the command for the user to run themselves or suggest an alternative.
+
+You have network access through run. For current data such as weather, time, prices or news, use
+Invoke-WebRequest or curl instead of saying you cannot fetch live data. Prefer PowerShell for
+network requests.
+
 Before calling run, write a short, natural answer in the user's language that names the exact
 command in backticks. Do not write a label like "proposed command"; write it the way you would
-say it. Do not ask for confirmation yourself; the CLI asks after you call run.
+say it.
+
 Use cmd only for one simple command with no pipes, redirects, &, &&, ||, %, !, ^ or ;. Use
 PowerShell 5.1 for everything else: separate steps with ; and pipe with |, for example
 `Get-ChildItem | Sort-Object Length`; never use &&, ||, |& or redirects. The user confirms the
 whole visible command once.
+
 Always wrap paths and values that contain spaces or shell operators in quotes.
+
 Never install or change packages to answer a question. Check whether a tool exists with explore
 and a read-only command such as `where git`; the run call must be the command from your answer,
 never a setup step.
+
 Never use Invoke-Expression or iex, Start-Process, cmd /c, wsl, Remove-Item, del, rd, format,
 diskpart, reg, schtasks or sc in PowerShell.
+
 After a command result, the user already sees the output above. Reply with at most one short
 sentence that says whether it worked or what it means. Never repeat output values, paths, names
 or versions that are already visible, and do not claim changes the output does not show. If the
 output is the answer, stop.
+
 Set follow_up to false only when the command output is the complete answer and you have nothing
 to add, for example Get-Location, Get-ChildItem or Get-Content. Set it to true for state changes,
 warnings, failures, or when another step follows. On a failure the CLI continues anyway.
+
 Keep the answer brief.
+
 IMPORTANT: every command you propose goes through the run tool. Never write a command as text
 only; without the tool call the user cannot run it. Name the command in your answer in backticks
 and then call run with exactly that command and the chosen shell.
+
 Do not use em-dashes.
 "#;
 
@@ -148,7 +186,7 @@ pub async fn ask(config: &Config, prompt: &str) -> Result<()> {
         for call in &tool_calls {
             match tools::handle(&mut config, call, &reply.content)? {
                 ToolOutcome::Message(result) => messages.push(Message::tool(&call.id, result)),
-                ToolOutcome::Done | ToolOutcome::Declined => return Ok(()),
+                ToolOutcome::Done => return Ok(()),
             }
         }
     }

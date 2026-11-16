@@ -54,6 +54,8 @@ Do not invent system details or add unnecessary explanation.
 
 The model calls the `run` tool with one exact command string. On Linux the tool uses `bash`; commands may chain steps with `&&` and pipe with `|`. On Windows the tool takes a `shell` argument: `cmd` for one simple command, or `powershell` for everything else. The displayed command string is also the string passed to the shell; no model request occurs between confirmation and execution. Every `run` call requires `y` confirmation, with all other input, including Enter, declining execution. A chain is confirmed once as a whole, and every stage is validated separately; on Linux `;`, `||`, `|&` and redirects are blocked; in PowerShell `&&`, `||`, `|&` and redirects are blocked. The model can mark a successful command as self-contained with `follow_up: false`; askllm then stops after the output. A failed command always returns to the model, which may explain it or call another tool.
 
+`explore` has no shell parameter; it always uses cmd on Windows and sh on Linux. It is the model's own read-only investigation area and is not for user-facing actions or network requests. The model may use `run` during research when `explore` cannot answer; every such command is confirmed. A declined `run` returns a message to the model so it can explain the command and continue instead of ending the turn. The model has network access through `run`, so live data such as weather can be fetched with `Invoke-WebRequest` or `curl`.
+
 Commands run on the user's terminal: stdin is inherited, so password prompts and line-based questions go directly to the terminal and are never captured. Stdout and stderr are captured and shown live. The captured output and the exit code are returned to the model as the tool result. Non-zero exits are reported directly. The result is bounded to 24 KiB, keeping the head and tail. Full-screen programs that need a terminal on stdout, such as `nano`, are not supported.
 
 Read-only exploration uses the separate `explore` tool. Its first use displays the default allowlist and asks for one-time approval. Individual commands outside the allowlist require explicit approval before being added. Shell composition, redirects, substitutions, and private-path requests are rejected independently of allowlist entries.
@@ -62,13 +64,14 @@ Read-only exploration uses the separate `explore` tool. Its first use displays t
 
 On Windows the same two tools map to different backends:
 
-- `explore` runs `cmd.exe /C` with a narrow read-only allowlist. The default
-  list is `dir`, `dir *`, `where *`, `whoami`, `whoami *`, `ipconfig`,
-  `ipconfig /all`, `ver`, `vol`, `hostname`, `tasklist`, `tasklist *`,
-  `getmac` and `getmac *`. One simple command is accepted; `&`, `|`, `>`, `<`,
-  `%`, `!`, `^`, `;`, recursive flags (`/s`, `/r`) and interactive flags
-  (`/p`) are rejected. `ipconfig /release`, `/renew` and `/flushdns` are also
-  rejected. Private paths are blocked.
+- `explore` runs `cmd.exe /C` with a narrow read-only allowlist. It has no
+  shell parameter and always uses cmd on Windows. The default list is `dir`,
+  `dir *`, `where *`, `whoami`, `whoami *`, `ipconfig`, `ipconfig /all`,
+  `ver`, `vol`, `hostname`, `tasklist`, `tasklist *`, `getmac` and `getmac *`.
+  One simple command is accepted; `&`, `|`, `>`, `<`, `%`, `!`, `^`, `;`,
+  recursive flags (`/s`, `/r`) and interactive flags (`/p`) are rejected.
+  `ipconfig /release`, `/renew` and `/flushdns` are also rejected. Private
+  paths are blocked.
 - `run` takes `shell = "cmd"` or `shell = "powershell"` (the default). With
   `cmd`, one simple command is accepted; no pipes, redirects, `&`, `&&`, `||`,
   `%`, `!`, `^` or `;`. It accepts writes and file reads after confirmation,

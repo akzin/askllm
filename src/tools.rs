@@ -13,7 +13,6 @@ const TRUNCATION_MARKER: &str = "\n[... output truncated ...]\n";
 pub enum ToolOutcome {
     Message(String),
     Done,
-    Declined,
 }
 
 pub fn handle(config: &mut Config, call: &ToolCall, content: &str) -> Result<ToolOutcome> {
@@ -53,7 +52,11 @@ fn run_command(call: &ToolCall, content: &str) -> Result<ToolOutcome> {
 
     ui::command_start(shell.label(), command);
     if !ui::confirm()? {
-        return Ok(ToolOutcome::Declined);
+        return Ok(ToolOutcome::Message(
+            "The user declined to run the command. Do not retry the same command. \
+             Explain the command for the user to run themselves, or suggest an alternative."
+                .to_owned(),
+        ));
     }
 
     let result = match run_attached(command, shell) {
