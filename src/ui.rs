@@ -22,12 +22,8 @@ pub fn probe_preview_line(output: &str) {
     println!("{}", style::dim(&format!("  → {}", probe_preview(output))));
 }
 
-pub fn bash_start(command: &str) {
-    println!("{}", style::dim(&format!("▸ bash\n  {command}")));
-}
-
-pub fn bash_end(command: &str) {
-    println!("{}", style::dim(&format!("▾ bash\n  {command}")));
+pub fn command_start(shell: &str, command: &str) {
+    println!("{}", style::dim(&format!("▸ {shell}\n  {command}")));
 }
 
 pub fn blocked(error: &str) {

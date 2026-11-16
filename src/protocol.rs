@@ -92,6 +92,10 @@ pub struct ChatRequest {
     pub tool_choice: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -118,6 +122,8 @@ impl ChatRequest {
             tools,
             tool_choice,
             reasoning_effort: None,
+            temperature: None,
+            top_p: None,
         }
     }
 
@@ -125,43 +131,94 @@ impl ChatRequest {
         self.reasoning_effort = effort;
         self
     }
+
+    pub fn with_sampling(mut self, temperature: Option<f64>, top_p: Option<f64>) -> Self {
+        self.temperature = temperature;
+        self.top_p = top_p;
+        self
+    }
 }
 
 pub fn tool_definitions() -> Vec<ToolDefinition> {
+    let (run_description, run_parameters, explore_description) = if cfg!(windows) {
+        (
+            "Run a shell command on the user's machine. The command runs only after the user \
+             confirms it with y/N. Use run for anything that needs the user's approval: commands \
+             outside the explore allowlist, network requests, live data, and actions that change \
+             the system. You may use run during research as well as for the final command. Choose \
+             shell=cmd only for one simple command; use shell=powershell for everything else, \
+             including network requests. cmd has no pipes, redirects, &, &&, ||, %, !, ^ or ;. \
+             PowerShell uses ; to separate steps and | to pipe; never use &&, ||, |& or redirects. \
+             Set follow_up to false when the output speaks for itself.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "The exact single-line command to run."
+                    },
+                    "follow_up": {
+                        "type": "boolean",
+                        "description": "Set false only when the command output is the complete answer and needs no explanation. Set true for state changes, warnings, failures, or when another step follows."
+                    },
+                    "shell": {
+                        "type": "string",
+                        "enum": ["cmd", "powershell"],
+                        "default": "powershell",
+                        "description": "Use cmd for one simple command; use powershell for everything else, including network requests."
+                    }
+                },
+                "required": ["command"]
+            }),
+            "Run exactly one read-only cmd command for your own investigation before answering. \
+             explore always uses cmd on Windows and has no shell parameter; it is not for \
+             user-facing actions or network requests. Use it for simple checks like dir, where, \
+             whoami, ipconfig, ver, vol, hostname, tasklist and getmac. The command must match the \
+             user's allowlist and must not use pipes, redirects, &, &&, ||, %, !, ^, ; or private \
+             files.",
+        )
+    } else {
+        (
+            "Run a bash command on the user's machine. The command runs only after the user \
+             confirms it with y/N. Use run for anything that needs the user's approval, including \
+             network requests and live data; you may use it during research as well as for the \
+             final command. You may chain steps with && and pipe with |; never use ;, ||, |& or \
+             redirects. Set follow_up to false when the output speaks for itself.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "The exact single-line command to run."
+                    },
+                    "follow_up": {
+                        "type": "boolean",
+                        "description": "Set false only when the command output is the complete answer and needs no explanation. Set true for state changes, warnings, failures, or when another step follows."
+                    }
+                },
+                "required": ["command"]
+            }),
+            "Run exactly one read-only sh command for your own investigation before answering. \
+             explore always uses sh on Linux and has no shell parameter; it is not for user-facing \
+             actions or network requests. The command must match the user's allowlist and must not \
+             use pipes, redirects, semicolons, substitutions or private files.",
+        )
+    };
+
     vec![
         ToolDefinition {
             kind: "function".to_owned(),
             function: FunctionDefinition {
-                name: "bash".to_owned(),
-                description: "Run the shell command on the user's machine. The command runs only \
-                    after the user confirms it. Use it for every command you propose. You may \
-                    chain steps with && and pipe with |; never use ;, ||, |& or redirects. Set \
-                    follow_up to false when the output speaks for itself."
-                    .to_owned(),
-                parameters: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "command": {
-                            "type": "string",
-                            "description": "The exact single-line command to run."
-                        },
-                        "follow_up": {
-                            "type": "boolean",
-                            "description": "Set false only when the command output is the complete answer and needs no explanation, for example pwd or ls. Set true for state changes, warnings, failures, or when another step follows."
-                        }
-                    },
-                    "required": ["command"]
-                }),
+                name: "run".to_owned(),
+                description: run_description.to_owned(),
+                parameters: run_parameters,
             },
         },
         ToolDefinition {
             kind: "function".to_owned(),
             function: FunctionDefinition {
                 name: "explore".to_owned(),
-                description: "Run exactly one read-only shell command to inspect the system \
-                    before answering. The command must match the user's allowlist and must not \
-                    use pipes, redirects, semicolons, substitutions or private files."
-                    .to_owned(),
+                description: explore_description.to_owned(),
                 parameters: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -390,15 +447,45 @@ mod tests {
         assert!(request.stream);
         assert_eq!(request.messages.len(), 1);
         assert_eq!(request.tools.len(), 2);
-        assert_eq!(request.tools[0].function.name, "bash");
+        assert_eq!(request.tools[0].function.name, "run");
         assert_eq!(request.tool_choice.as_deref(), Some("auto"));
         assert_eq!(request.reasoning_effort.as_deref(), Some("none"));
+        assert_eq!(request.temperature, None);
+        assert_eq!(request.top_p, None);
     }
 
     #[test]
-    fn bash_tool_documents_follow_up() {
+    fn omits_sampling_parameters_when_unset() {
+        let request =
+            ChatRequest::streaming("model", vec![Message::user("question")], tool_definitions());
+        let value = serde_json::to_value(&request).unwrap();
+        assert!(value.get("temperature").is_none());
+        assert!(value.get("top_p").is_none());
+    }
+
+    #[test]
+    fn includes_sampling_parameters_when_set() {
+        let request =
+            ChatRequest::streaming("model", vec![Message::user("question")], tool_definitions())
+                .with_sampling(Some(0.0), Some(1.0));
+        let value = serde_json::to_value(&request).unwrap();
+        assert_eq!(value["temperature"].as_f64(), Some(0.0));
+        assert_eq!(value["top_p"].as_f64(), Some(1.0));
+    }
+
+    #[test]
+    fn run_tool_documents_follow_up() {
         let schema = tool_definitions()[0].function.parameters.to_string();
         assert!(schema.contains("follow_up"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_run_tool_exposes_shell_choice() {
+        let schema = tool_definitions()[0].function.parameters.to_string();
+        assert!(schema.contains("shell"));
+        assert!(schema.contains("cmd"));
+        assert!(schema.contains("powershell"));
     }
 
     #[test]
@@ -468,7 +555,7 @@ mod tests {
         let mut decoder = SseDecoder::default();
         let first = feed_all(
             &mut decoder,
-            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"bash\",\"arguments\":\"{\\\"com\"}}]},\"finish_reason\":null}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"run\",\"arguments\":\"{\\\"com\"}}]},\"finish_reason\":null}]}\n\n",
         );
         let second = feed_all(
             &mut decoder,
@@ -483,7 +570,7 @@ mod tests {
         let calls = accumulator.finish();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].id, "call_1");
-        assert_eq!(calls[0].function.name, "bash");
+        assert_eq!(calls[0].function.name, "run");
         assert_eq!(calls[0].function.arguments, r#"{"command":"pwd"}"#);
     }
 

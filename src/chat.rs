@@ -17,6 +17,8 @@ pub struct ChatClient {
     model: String,
     api_key: Option<String>,
     reasoning_effort: Option<String>,
+    temperature: Option<f64>,
+    top_p: Option<f64>,
     tools_enabled: bool,
 }
 
@@ -38,6 +40,8 @@ impl ChatClient {
             model: config.model.clone(),
             api_key: config.api_key.clone(),
             reasoning_effort: config.reasoning_effort.clone(),
+            temperature: config.temperature,
+            top_p: config.top_p,
             tools_enabled: config.command_execution_enabled,
         })
     }
@@ -49,7 +53,8 @@ impl ChatClient {
         stream: bool,
     ) -> ChatRequest {
         let mut request = ChatRequest::streaming(&self.model, messages.to_vec(), tools)
-            .with_reasoning_effort(self.reasoning_effort.clone());
+            .with_reasoning_effort(self.reasoning_effort.clone())
+            .with_sampling(self.temperature, self.top_p);
         request.stream = stream;
         request
     }
@@ -140,6 +145,8 @@ mod tests {
             api_key: None,
             system_prompt: "test".to_owned(),
             reasoning_effort: None,
+            temperature: None,
+            top_p: None,
             command_execution_enabled: false,
             explore_allow: Vec::new(),
             explore_approved: false,
@@ -216,7 +223,7 @@ mod tests {
 
     #[tokio::test]
     async fn assembles_tool_calls_from_an_sse_server() {
-        let body = r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"bash","arguments":"{\"command\":\"pwd\"}"}}]}}]}
+        let body = r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"run","arguments":"{\"command\":\"pwd\"}"}}]}}]}
 
 data: [DONE]
 
@@ -230,7 +237,7 @@ data: [DONE]
         handle.join().unwrap();
 
         assert_eq!(reply.tool_calls.len(), 1);
-        assert_eq!(reply.tool_calls[0].function.name, "bash");
+        assert_eq!(reply.tool_calls[0].function.name, "run");
         assert_eq!(
             reply.tool_calls[0].function.arguments,
             r#"{"command":"pwd"}"#
