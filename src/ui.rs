@@ -26,10 +26,6 @@ pub fn command_start(shell: &str, command: &str) {
     println!("{}", style::dim(&format!("▸ {shell}\n  {command}")));
 }
 
-pub fn command_end(shell: &str, command: &str) {
-    println!("{}", style::dim(&format!("▾ {shell}\n  {command}")));
-}
-
 pub fn blocked(error: &str) {
     eprintln!("{}", style::dim(&format!("Execution blocked: {error}")));
 }

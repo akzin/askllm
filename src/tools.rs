@@ -46,7 +46,7 @@ fn run_command(call: &ToolCall, content: &str) -> Result<ToolOutcome> {
     if content.trim().is_empty() || !content.contains(command.as_str()) {
         return Ok(ToolOutcome::Message(
             "error: nothing ran. Answer the user first in one or two sentences and name the \
-             exact command in backticks; then call bash with that same command."
+             exact command in backticks; then call run with that same command."
                 .to_owned(),
         ));
     }
@@ -56,7 +56,6 @@ fn run_command(call: &ToolCall, content: &str) -> Result<ToolOutcome> {
         return Ok(ToolOutcome::Declined);
     }
 
-    ui::command_end(shell.label(), command);
     let result = match run_attached(command, shell) {
         Ok(result) => result,
         Err(error) => {
