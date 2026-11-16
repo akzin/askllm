@@ -1,6 +1,6 @@
 use crate::command::{
-    matches_allowlist, run_attached, run_exploration, validate_command, validate_command_chain,
-    DEFAULT_EXPLORE_ALLOWLIST,
+    default_explore_allowlist, matches_allowlist, parse_shell, run_attached, run_exploration,
+    syntax_hint, validate_explore, validate_run,
 };
 use crate::config::Config;
 use crate::protocol::ToolCall;
@@ -18,25 +18,29 @@ pub enum ToolOutcome {
 
 pub fn handle(config: &mut Config, call: &ToolCall, content: &str) -> Result<ToolOutcome> {
     match call.function.name.as_str() {
-        "bash" => run_bash(call, content),
+        "run" | "bash" => run_command(call, content),
         "explore" => run_explore(config, call).map(ToolOutcome::Message),
         other => Ok(ToolOutcome::Message(format!("error: unknown tool {other}"))),
     }
 }
 
-fn run_bash(call: &ToolCall, content: &str) -> Result<ToolOutcome> {
-    let Some(arguments) = bash_arguments(&call.function.arguments) else {
+fn run_command(call: &ToolCall, content: &str) -> Result<ToolOutcome> {
+    let Some(arguments) = run_arguments(&call.function.arguments) else {
         return Ok(ToolOutcome::Message(
             "error: missing or invalid command argument".to_owned(),
         ));
     };
+    let shell = match parse_shell(arguments.shell.as_deref()) {
+        Ok(shell) => shell,
+        Err(error) => return Ok(ToolOutcome::Message(format!("error: {error}"))),
+    };
     let command = &arguments.command;
-    if let Err(error) = validate_command_chain(command) {
+    if let Err(error) = validate_run(command, shell) {
         ui::blocked(&format!("{error}"));
         return Ok(ToolOutcome::Message(format!(
             "error: nothing ran. The command was blocked: {error}. \
-             Call bash again with one command; use && for steps and | for pipelines, \
-             and never use ;, ||, |& or redirects."
+             Call run again with one command; {}.",
+            syntax_hint(shell)
         )));
     }
     if content.trim().is_empty() || !content.contains(command.as_str()) {
@@ -47,13 +51,13 @@ fn run_bash(call: &ToolCall, content: &str) -> Result<ToolOutcome> {
         ));
     }
 
-    ui::bash_start(command);
+    ui::command_start(shell.label(), command);
     if !ui::confirm()? {
         return Ok(ToolOutcome::Declined);
     }
 
-    ui::bash_end(command);
-    let result = match run_attached(command) {
+    ui::command_end(shell.label(), command);
+    let result = match run_attached(command, shell) {
         Ok(result) => result,
         Err(error) => {
             return Ok(ToolOutcome::Message(format!(
@@ -85,19 +89,19 @@ fn run_explore(config: &mut Config, call: &ToolCall) -> Result<String> {
     let Some(command) = command_argument(&call.function.arguments) else {
         return Ok("error: missing or invalid command argument".to_owned());
     };
-    if let Err(error) = validate_command(&command) {
+    if let Err(error) = validate_explore(&command) {
         return Ok(format!(
             "error: the command was blocked by the safety policy: {error}"
         ));
     }
 
     if !config.explore_approved {
-        ui::default_allowlist(DEFAULT_EXPLORE_ALLOWLIST);
+        ui::default_allowlist(default_explore_allowlist());
         if !ui::ask_allow_once()? {
             return Ok("the user declined read-only exploration".to_owned());
         }
         if config.explore_allow.is_empty() {
-            config.explore_allow = DEFAULT_EXPLORE_ALLOWLIST
+            config.explore_allow = default_explore_allowlist()
                 .iter()
                 .map(|allowed| (*allowed).to_owned())
                 .collect();
@@ -145,25 +149,27 @@ fn command_argument(arguments: &str) -> Option<String> {
 }
 
 #[derive(serde::Deserialize)]
-struct BashArguments {
+struct RunArguments {
     command: String,
     #[serde(default = "follow_up_default")]
     follow_up: bool,
+    shell: Option<String>,
 }
 
 fn follow_up_default() -> bool {
     true
 }
 
-fn bash_arguments(arguments: &str) -> Option<BashArguments> {
-    let arguments: BashArguments = serde_json::from_str(arguments).ok()?;
+fn run_arguments(arguments: &str) -> Option<RunArguments> {
+    let arguments: RunArguments = serde_json::from_str(arguments).ok()?;
     let command = arguments.command.trim().to_owned();
     if command.is_empty() {
         None
     } else {
-        Some(BashArguments {
+        Some(RunArguments {
             command,
             follow_up: arguments.follow_up,
+            shell: arguments.shell,
         })
     }
 }
@@ -206,7 +212,7 @@ fn ceil_char_boundary(value: &str, mut index: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::{
-        bash_arguments, bounded_output, command_argument, should_stop, MAX_TOOL_OUTPUT_BYTES,
+        bounded_output, command_argument, run_arguments, should_stop, MAX_TOOL_OUTPUT_BYTES,
     };
 
     #[test]
@@ -220,16 +226,20 @@ mod tests {
     }
 
     #[test]
-    fn parses_follow_up_from_bash_arguments() {
-        let arguments = bash_arguments(r#"{"command":"pwd"}"#).unwrap();
+    fn parses_follow_up_and_shell_from_run_arguments() {
+        let arguments = run_arguments(r#"{"command":"pwd"}"#).unwrap();
         assert_eq!(arguments.command, "pwd");
         assert!(arguments.follow_up);
+        assert_eq!(arguments.shell, None);
 
-        let arguments = bash_arguments(r#"{"command":"pwd","follow_up":false}"#).unwrap();
+        let arguments = run_arguments(r#"{"command":"pwd","follow_up":false}"#).unwrap();
         assert!(!arguments.follow_up);
 
-        assert!(bash_arguments(r#"{"command":"   "}"#).is_none());
-        assert!(bash_arguments("not json").is_none());
+        let arguments = run_arguments(r#"{"command":"Get-Date","shell":"powershell"}"#).unwrap();
+        assert_eq!(arguments.shell.as_deref(), Some("powershell"));
+
+        assert!(run_arguments(r#"{"command":"   "}"#).is_none());
+        assert!(run_arguments("not json").is_none());
     }
 
     #[test]

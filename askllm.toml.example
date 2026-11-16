@@ -1,4 +1,5 @@
-# Copy to ~/.config/askllm/config.toml
+# Linux: copy to ~/.config/askllm/config.toml
+# Windows: copy to %APPDATA%\askllm\config.toml
 base_url = "http://localhost:20128/v1"
 model = "gh/gpt-5.6-luna"
 
@@ -12,6 +13,11 @@ Do not invent system details or add unnecessary explanation.
 
 command_execution_enabled = true
 reasoning_effort = "none"
+
+# Sampling: lower temperature makes command generation more predictable.
+# Remove either key to leave it to the endpoint.
+temperature = 0.0
+top_p = 1.0
 
 [explore]
 allow = []

@@ -18,12 +18,17 @@
   ],
   "stream": true,
   "tools": [
-    {"type": "function", "function": {"name": "bash", "parameters": {}}},
+    {"type": "function", "function": {"name": "run", "parameters": {}}},
     {"type": "function", "function": {"name": "explore", "parameters": {}}}
   ],
-  "reasoning_effort": "none"
+  "reasoning_effort": "none",
+  "temperature": 0.0,
+  "top_p": 1.0
 }
 ```
+
+`temperature` and `top_p` are optional and only included when configured in
+the TOML file.
 
 ## Response
 
@@ -34,14 +39,42 @@ Parse the OpenAI-compatible SSE stream and print `choices[0].delta.content` as i
 1. `main`: arguments and exit codes.
 2. `config`: TOML loading, atomic writes, and persisted exploration consent.
 3. `chat`: one HTTP client with timeouts, SSE streaming, and tool-call assembly.
-4. `tools`: `bash` and `explore` handling, confirmation outcomes, and output bounding.
-5. `command`: command validation, terminal execution, output capture, and allowlist matching.
-6. `protocol`: request/stream models, tool definitions, and tool-call assembly.
-7. `ui`: terminal rendering, prompts, and probe previews.
-8. `client`: the tool loop, instructions, and the retry nudge.
+4. `tools`: `run` and `explore` handling, confirmation outcomes, and output bounding.
+5. `command`: shared capture, confirmation, allowlist matching, output bounds, the shell selector, and the platform facade.
+6. `posix`: the Unix backend: `bash -c` for `run`, `sh -c` for `explore`, the POSIX validator and the Unix default allowlist.
+7. `windows_cmd`: the Windows cmd backend: `cmd.exe /C` for `explore` and for `run` with `shell = "cmd"`, with strict token validation and its default allowlist.
+8. `windows_powershell`: the Windows PowerShell backend: `powershell.exe`, base64/UTF-16LE `-EncodedCommand`, and the PowerShell blocklist for `run` with `shell = "powershell"`.
+9. `shell`: the POSIX command parser (Unix only).
+10. `protocol`: request/stream models, tool definitions, and tool-call assembly.
+11. `ui`: terminal rendering, prompts, and probe previews.
+12. `client`: the tool loop, instructions, and the retry nudge.
+
+## Platform backends
+
+The backend is selected at compile time. `command` exposes the same functions
+to `tools` on every platform:
+
+- `explore` on Unix: `sh -c` with the POSIX allowlist and blocklist.
+- `run` on Unix: `bash --noprofile --norc -c` with the POSIX chain/pipeline
+  validator.
+- `explore` on Windows: `cmd.exe /C`; only a simple command is accepted. The
+  tokenizer rejects `&`, `|`, `>`, `<`, `%`, `!`, `^`, `;` and control
+  characters, recursive flags and private paths.
+- `run` on Windows with `shell = "cmd"`: `cmd.exe /C`, one simple command, no
+  operators, redirects or expansion. It accepts writes and file reads after
+  confirmation, but blocks shell hosts, scripts and system-level tools.
+- `run` on Windows with `shell = "powershell"`: `powershell.exe -NoLogo
+  -NoProfile -NonInteractive -EncodedCommand`; the command is UTF-16LE/base64
+  encoded, output encoding is forced to UTF-8, and a blocklist rejects
+  dangerous cmdlets, aliases, shell hosts and redirection. Every `run` command
+  is confirmed.
+
+The child inherits askllm's console and writes to pipes; no new console window
+is created. Windows-specific modules are compiled only with `cfg(windows)`, so
+the Linux build has no dependency on PowerShell or cmd.
 
 The chat layer only knows the OpenAI-compatible protocol; provider-specific logic does not belong in the CLI. The model name and configured system prompt are read from TOML; internal command-safety and response-format instructions are appended. Configuration lives in TOML. `NO_COLOR` controls styling, and `HOME` or `XDG_CONFIG_HOME` can affect the config path.
 
 ## Tests
 
-`chat` keeps a fake local SSE server test for streaming content and tool-call assembly. Confirmation stays end-to-end manual because it reads the terminal; the remaining tool logic is covered by unit tests.
+`chat` keeps a fake local SSE server test for streaming content and tool-call assembly. Confirmation stays end-to-end manual because it reads the terminal. POSIX execution tests run on Unix; the Windows cmd and PowerShell validators and their simple execution paths have `#[cfg(windows)]` tests. CI runs the same formatting, Clippy, test and release-build steps on `ubuntu-latest` and `windows-latest`.

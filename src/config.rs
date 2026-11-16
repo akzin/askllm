@@ -1,14 +1,18 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+const CONFIG_EXAMPLE_URL: &str = "https://github.com/akzin/askllm/blob/master/askllm.toml.example";
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Config {
     pub base_url: String,
     pub model: String,
     pub api_key: Option<String>,
     pub system_prompt: String,
     pub reasoning_effort: Option<String>,
+    pub temperature: Option<f64>,
+    pub top_p: Option<f64>,
     pub command_execution_enabled: bool,
     pub explore_allow: Vec<String>,
     pub explore_approved: bool,
@@ -40,6 +44,8 @@ impl Config {
             reasoning_effort: file
                 .reasoning_effort
                 .filter(|value| !value.trim().is_empty()),
+            temperature: file.temperature,
+            top_p: file.top_p,
             command_execution_enabled: file.command_execution_enabled,
             explore_allow: file.explore.allow,
             explore_approved: file.explore.approved,
@@ -105,6 +111,8 @@ struct FileConfig {
     system_prompt: Option<String>,
     #[serde(default = "default_reasoning_effort")]
     reasoning_effort: Option<String>,
+    temperature: Option<f64>,
+    top_p: Option<f64>,
     #[serde(default = "default_execution_enabled")]
     command_execution_enabled: bool,
     #[serde(default)]
@@ -133,10 +141,28 @@ fn default_config_path() -> Result<PathBuf> {
 }
 
 fn load_file_config(path: &Path) -> Result<FileConfig> {
-    let contents = std::fs::read_to_string(path)
-        .with_context(|| format!("failed to read config file {}", path.display()))?;
-    toml::from_str(&contents)
-        .with_context(|| format!("failed to parse config file {}", path.display()))
+    let contents = match std::fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(anyhow!(
+                "config file not found: {}\ncreate it from the example: {}",
+                path.display(),
+                CONFIG_EXAMPLE_URL
+            ));
+        }
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("failed to read config file {}", path.display()));
+        }
+    };
+
+    toml::from_str(&contents).with_context(|| {
+        format!(
+            "failed to parse config file {}; see the example at {}",
+            path.display(),
+            CONFIG_EXAMPLE_URL
+        )
+    })
 }
 
 #[cfg(test)]
@@ -200,6 +226,42 @@ mod tests {
         let reloaded = Config::from_file(Some(&path)).unwrap();
         assert_eq!(reloaded.explore_allow, ["id", "df -h"]);
         assert!(reloaded.explore_approved);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn missing_config_names_the_path_and_the_example() {
+        let path = config_path("missing");
+        let _ = std::fs::remove_file(&path);
+
+        let error = Config::from_file(Some(&path)).unwrap_err();
+        let message = format!("{error:#}");
+
+        assert!(message.contains(&path.display().to_string()));
+        assert!(message.contains(super::CONFIG_EXAMPLE_URL));
+    }
+
+    #[test]
+    fn sampling_parameters_are_optional() {
+        let path = config_path("sampling");
+        std::fs::write(
+            &path,
+            "base_url = 'http://localhost/v1'\nmodel = 'test'\nsystem_prompt = 'brief'\n",
+        )
+        .unwrap();
+
+        let config = Config::from_file(Some(&path)).unwrap();
+        assert_eq!(config.temperature, None);
+        assert_eq!(config.top_p, None);
+
+        std::fs::write(
+            &path,
+            "base_url = 'http://localhost/v1'\nmodel = 'test'\nsystem_prompt = 'brief'\ntemperature = 0.0\ntop_p = 1.0\n",
+        )
+        .unwrap();
+        let config = Config::from_file(Some(&path)).unwrap();
+        assert_eq!(config.temperature, Some(0.0));
+        assert_eq!(config.top_p, Some(1.0));
         std::fs::remove_file(path).unwrap();
     }
 
